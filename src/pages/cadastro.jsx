@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import "../styles/login.css";
 import axios from "axios";
+import { isAuthenticated, getAuthToken } from "../utils/auth";
 
 const Cadastro = () => {
   const [formData, setFormData] = useState({
