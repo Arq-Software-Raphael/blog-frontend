@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import Header from "../components/Header/index";
-import '../App.css'
+import "../App.css";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
 
@@ -10,6 +10,7 @@ const Feed = () => {
   const [newPostImage, setNewPostImage] = useState(null);
   const [commentInputs, setCommentInputs] = useState({});
   const [username, setUsername] = useState("Usuário");
+  const [userId, setUserId] = useState(null);
 
   const defaultUserImg = "https://cdn-icons-png.flaticon.com/512/149/149071.png";
   const navigate = useNavigate();
@@ -23,48 +24,58 @@ const Feed = () => {
 
     axios
       .get("http://localhost:8000/api/auth/me/", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       })
       .then((res) => {
-        setUsername(res.data.name); 
+        setUsername(res.data.name);
+        setUserId(res.data.id);
       })
-      .catch((err) => {
-        console.error("Erro ao buscar usuário:", err);
+      .catch(() => {
         navigate("/login");
       });
+  }, [navigate]);
 
-    axios
-      .get("http://localhost:8001/api/posts/")
-      .then((res) => {
-        const loadedPosts = res.data;
-        Promise.all(
-          loadedPosts.map((post) =>
-            axios
-              .get(`http://localhost:8002/api/comments/?post_id=${post.id}`)
-              .then((commentsRes) => ({
+  useEffect(() => {
+    async function fetchPostsAndComments() {
+      try {
+        const postsRes = await axios.get("http://localhost:8001/api/posts/");
+        const loadedPosts = postsRes.data;
+
+        const postsWithComments = await Promise.all(
+          loadedPosts.map(async (post) => {
+            try {
+              const commentsRes = await axios.get(
+                `http://localhost:8002/api/comments/?post_id=${post.id}`
+              );
+              return {
                 ...post,
-                comments: commentsRes.data,
-              }))
-              .catch(() => ({
+                comments: Array.isArray(commentsRes.data) ? commentsRes.data : [],
+              };
+            } catch {
+              return {
                 ...post,
                 comments: [],
-              }))
-          )
-        ).then((postsWithComments) => {
-          setPosts(postsWithComments);
-        });
-      })
-      .catch((err) => console.error(err));
-  }, [navigate]);
+              };
+            }
+          })
+        );
+
+        setPosts(postsWithComments);
+      } catch (error) {
+        console.error("Erro ao carregar posts:", error);
+        setPosts([]);
+      }
+    }
+
+    fetchPostsAndComments();
+  }, []);
 
   const handleLogout = () => {
     localStorage.removeItem("token");
     navigate("/login");
   };
 
-  const handleNewPostSubmit = (e) => {
+  const handleNewPostSubmit = async (e) => {
     e.preventDefault();
     if (!newPostContent.trim()) return;
 
@@ -76,18 +87,17 @@ const Feed = () => {
       formData.append("image", newPostImage);
     }
 
-    axios
-      .post("http://localhost:8001/api/posts/", formData, {
+    try {
+      const response = await axios.post("http://localhost:8001/api/posts/", formData, {
         headers: { "Content-Type": "multipart/form-data" },
-      })
-      .then((response) => {
-        setPosts([response.data, ...posts]);
-        setNewPostContent("");
-        setNewPostImage(null);
-      })
-      .catch((error) => {
-        console.error("Erro ao criar post:", error);
       });
+
+      setPosts([{ ...response.data, comments: [] }, ...posts]);
+      setNewPostContent("");
+      setNewPostImage(null);
+    } catch (error) {
+      console.error("Erro ao publicar post:", error);
+    }
   };
 
   const handleLike = (postId) => {
@@ -102,45 +112,40 @@ const Feed = () => {
     setCommentInputs({ ...commentInputs, [postId]: text });
   };
 
-  const handleCommentSubmit = (e, postId) => {
+  const handleCommentSubmit = async (e, postId) => {
     e.preventDefault();
     const commentText = commentInputs[postId];
     if (!commentText || !commentText.trim()) return;
+    if (!userId) return;
 
     const formData = new FormData();
     formData.append("post_id", postId);
-    formData.append("user_id", username);
+    formData.append("user_id", userId);
     formData.append("content", commentText);
 
-    axios
-      .post("http://localhost:8002/api/comments/", formData)
-      .then((response) => {
-        setPosts(
-          posts.map((post) =>
-            post.id === postId
-              ? {
-                  ...post,
-                  comments: [
-                    ...(Array.isArray(post.comments) ? post.comments : []),
-                    {
-                      id: response.data.id,
-                      user_id: username,
-                      content: commentText,
-                    },
-                  ],
-                }
-              : post
-          )
-        );
-        setCommentInputs({ ...commentInputs, [postId]: "" });
-      })
-      .catch((err) => console.error("Erro ao comentar:", err));
+    try {
+      const response = await axios.post("http://localhost:8002/api/comments/", formData);
+
+      setPosts(
+        posts.map((post) =>
+          post.id === postId
+            ? {
+                ...post,
+                comments: [...(post.comments || []), response.data],
+              }
+            : post
+        )
+      );
+      setCommentInputs({ ...commentInputs, [postId]: "" });
+    } catch (error) {
+      console.error("Erro ao enviar comentário:", error);
+    }
   };
 
   return (
     <>
       <Header />
-      <div style={{ display: "flex", justifyContent: "flex-end", padding: "10px" }}>
+      <div style={{ display: "flex", justifyContent: "flex-end", padding: 10 }}>
         <button onClick={handleLogout} className="btn-logout">
           Logout
         </button>
@@ -152,7 +157,7 @@ const Feed = () => {
             <textarea
               name="content"
               className="post-textarea"
-              rows="3"
+              rows={3}
               placeholder="No que você está pensando?"
               value={newPostContent}
               onChange={(e) => setNewPostContent(e.target.value)}
@@ -172,12 +177,12 @@ const Feed = () => {
         </div>
 
         <div className="post-feed">
-          {posts && posts.length > 0 ? (
+          {posts.length > 0 ? (
             posts.map((post) => (
               <div className="post-card" key={post.id}>
                 <div className="post-header">
                   <img
-                    src={defaultUserImg} // sempre a imagem padrão
+                    src={defaultUserImg}
                     className="profile-img"
                     alt={post.author}
                   />
@@ -199,19 +204,25 @@ const Feed = () => {
                 )}
 
                 <div className="post-actions">
-                  <button type="button" className="icon-button" onClick={() => handleLike(post.id)}>
-                    <span className="material-symbols-outlined">thumb_up</span> {post.likes || 0}
+                  <button
+                    type="button"
+                    className="icon-button"
+                    onClick={() => handleLike(post.id)}
+                  >
+                    <span className="material-symbols-outlined">thumb_up</span>{" "}
+                    {post.likes || 0}
                   </button>
                 </div>
+
                 <div className="post-comments">
-                  {post.comments && post.comments.length > 0 && (
-                    <div>
-                      {post.comments.map((comment) => (
-                        <p key={comment.id}>
-                          <strong>{comment.user_id}:</strong> {comment.content}
-                        </p>
-                      ))}
-                    </div>
+                  {post.comments && post.comments.length > 0 ? (
+                    post.comments.map((comment) => (
+                      <p key={comment.id}>
+                        <strong>Usuário {comment.user_id}:</strong> {comment.content}
+                      </p>
+                    ))
+                  ) : (
+                    <p className="no-comments">Seja o primeiro a comentar!</p>
                   )}
 
                   <form
@@ -224,9 +235,7 @@ const Feed = () => {
                       placeholder="Escreva um comentário..."
                       className="comment-input"
                       value={commentInputs[post.id] || ""}
-                      onChange={(e) =>
-                        handleCommentChange(post.id, e.target.value)
-                      }
+                      onChange={(e) => handleCommentChange(post.id, e.target.value)}
                     />
                     <button type="submit" className="btn-comment">
                       Comentar
